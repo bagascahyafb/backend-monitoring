@@ -290,12 +290,21 @@ outlier_data = {}
 def is_outlier(value, ideal_range):
     return value < ideal_range[0] or value > ideal_range[1]
 
-@app.route('/detect_outliers/node<int:id_gh>', methods=['GET'])
+# Mengatur zona waktu Jakarta
+jakarta_tz = pytz.timezone('Asia/Jakarta')
+
+# Fungsi untuk mengambil waktu 3 hari yang lalu
+def three_days_ago():
+    current_time = datetime.now(jakarta_tz)
+    three_days_ago = current_time - timedelta(days=3)
+    return three_days_ago.isoformat()
+
+@app.route('/outliers/node<int:id_gh>', methods=['GET'])
 def detect_outliers_node(id_gh):
     global outlier_data
 
-    # Ambil data historis dari Supabase
-    data_sensor = supabase.table('dataNode').select("*").eq("id_gh", id_gh).order("time", desc=True).limit(10).execute()
+    # Ambil data historis dari Supabase hanya hingga 3 hari yang lalu
+    data_sensor = supabase.table('dataNode').select("*").eq("id_gh", id_gh).gt("time", three_days_ago()).order("time", desc=True).execute()
     data = data_sensor.data
 
     # Variabel sementara untuk menyimpan data outlier per request
@@ -356,17 +365,6 @@ def detect_outliers_node(id_gh):
         "lumen_outliers": lumen_outliers
     }), 200
 
-@app.route('/outliers/notifications', methods=['GET'])
-def get_outlier_notifications():
-    # Mengembalikan data outlier yang sudah disimpan
-    # Hanya data terbaru dari setiap id_gh yang ditampilkan
-    return jsonify(list(outlier_data.values())), 200
-
-
-#-------cek kondisi GH 1 jam terakhir------
-# Mengatur zona waktu Jakarta
-jakarta_tz = pytz.timezone('Asia/Jakarta')
-
 @app.route('/check_all_gh', methods=['GET'])
 def check_all_greenhouses():
     # Daftar ID greenhouse yang ingin dicek
@@ -393,12 +391,73 @@ def check_all_greenhouses():
     if len(notifikasi) > 0:
         # Jika ada notifikasi error, return notifikasi tersebut
         return jsonify({
-            "status": "error",
             "notifikasi": notifikasi
         }), 404
     else:
         # Tidak memberikan respon apapun jika semua data berhasil diambil
         return '', 204  # No Content
+
+#-------route untuk mendapatkan outliers dari seluruh GH------
+@app.route('/outliers/all', methods=['GET'])
+def get_all_outliers():
+    global outlier_data
+
+    # Waktu sekarang dan 3 hari yang lalu di zona waktu Jakarta
+    three_days_ago_str = three_days_ago()
+
+    all_outliers = {
+        "temp_outliers": [],
+        "humid_outliers": [],
+        "soil_outliers": [],
+        "lumen_outliers": []
+    }
+
+    # Iterasi untuk setiap id_gh (contoh 1-12)
+    gh_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+    for id_gh in gh_ids:
+        # Ambil data dari Supabase untuk setiap gh berdasarkan id_gh dalam waktu hingga 3 hari yang lalu
+        data_sensor = supabase.table('dataNode').select("*").eq("id_gh", id_gh).gt("time", three_days_ago_str).execute()
+        data = data_sensor.data
+
+        # Periksa setiap data sensor dan bandingkan dengan nilai ideal
+        for record in data:
+            temp = record['temp']
+            humid = record['moist']
+            soil = record['soil']
+            lumen = record['lumen']
+
+            # Jika nilai keluar dari rentang ideal, tambahkan sebagai outlier
+            if is_outlier(temp, IDEAL_TEMP_RANGE):
+                all_outliers["temp_outliers"].append({
+                    "id_gh": id_gh,
+                    "time": record['time'],
+                    "value": temp
+                })
+
+            if is_outlier(humid, IDEAL_HUMID_RANGE):
+                all_outliers["humid_outliers"].append({
+                    "id_gh": id_gh,
+                    "time": record['time'],
+                    "value": humid
+                })
+
+            if is_outlier(soil, IDEAL_SOIL_RANGE):
+                all_outliers["soil_outliers"].append({
+                    "id_gh": id_gh,
+                    "time": record['time'],
+                    "value": soil
+                })
+
+            if is_outlier(lumen, IDEAL_LUMEN_RANGE):
+                all_outliers["lumen_outliers"].append({
+                    "id_gh": id_gh,
+                    "time": record['time'],
+                    "value": lumen
+                })
+
+    # Mengembalikan hasil outliers dari semua greenhouse
+    return jsonify(all_outliers), 200
     
 #---------Predict---------
 # Load the models (assuming models are saved as separate files for each variable)
